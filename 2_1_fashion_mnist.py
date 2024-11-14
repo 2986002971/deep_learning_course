@@ -1,102 +1,86 @@
 import os
-import random
 import shutil
 
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import torchvision
 import torchvision.transforms as transforms
+import torchvision.utils as vutils
 from torch.utils.tensorboard import SummaryWriter
 
 log_dir = "runs/fashion_mnist"
 
 
-def seed_everything(seed=42):
-    random.seed(seed)  # Python的随机种子
-    np.random.seed(seed)  # numpy的随机种子
-    torch.manual_seed(seed)  # PyTorch CPU的随机种子
-    torch.cuda.manual_seed(seed)  # PyTorch GPU的随机种子
-    torch.backends.cudnn.deterministic = True  # 确保每次返回的卷积算法是确定的
-    torch.backends.cudnn.benchmark = False  # 禁用cudnn的随机性
-
-
-class BasicBlock(nn.Module):
-    expansion = 1
-
-    def __init__(self, in_channels, out_channels, stride=1):
-        super(BasicBlock, self).__init__()
-        self.conv1 = nn.Conv2d(
-            in_channels,
-            out_channels,
-            kernel_size=3,
-            stride=stride,
-            padding=1,
-            bias=False,
-        )
-        self.bn1 = nn.BatchNorm2d(out_channels)
-        self.conv2 = nn.Conv2d(
-            out_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=False
-        )
-        self.bn2 = nn.BatchNorm2d(out_channels)
-
-        # shortcut连接
-        self.shortcut = nn.Sequential()
-        if stride != 1 or in_channels != out_channels:
-            self.shortcut = nn.Sequential(
-                nn.Conv2d(
-                    in_channels, out_channels, kernel_size=1, stride=stride, bias=False
-                ),
-                nn.BatchNorm2d(out_channels),
-            )
+class LeNet(nn.Module):
+    def __init__(self):
+        super(LeNet, self).__init__()
+        self.conv1 = nn.Conv2d(1, 6, 5)
+        self.pool = nn.AvgPool2d(2, 2)
+        self.conv2 = nn.Conv2d(6, 16, 5)
+        self.fc1 = nn.Linear(16 * 4 * 4, 120)
+        self.fc2 = nn.Linear(120, 84)
+        self.fc3 = nn.Linear(84, 10)
 
     def forward(self, x):
-        out = F.relu(self.bn1(self.conv1(x)))
-        out = self.bn2(self.conv2(out))
-        out += self.shortcut(x)
-        out = F.relu(out)
-        return out
+        x = self.pool(F.sigmoid(self.conv1(x)))
+        x = self.pool(F.sigmoid(self.conv2(x)))
+        x = x.view(-1, 16 * 4 * 4)
+        x = F.sigmoid(self.fc1(x))
+        x = F.sigmoid(self.fc2(x))
+        x = self.fc3(x)
+        return x
+
+    def get_features(self, x):
+        """获取中间层特征图"""
+        features = []
+        x = self.conv1(x)
+        features.append(x)  # conv1 features
+        x = F.sigmoid(x)
+        x = self.pool(x)
+
+        x = self.conv2(x)
+        features.append(x)  # conv2 features
+        x = F.sigmoid(x)
+        x = self.pool(x)
+        return features
 
 
-class SmallResNet(nn.Module):
-    def __init__(self, num_classes=10):
-        super(SmallResNet, self).__init__()
-        # 初始卷积层
-        self.conv1 = nn.Conv2d(1, 32, kernel_size=3, stride=1, padding=1, bias=False)
-        self.bn1 = nn.BatchNorm2d(32)
+def visualize_features(model, dataloader, device, writer):
+    model.eval()
+    # 获取一个batch的图像
+    images, _ = next(iter(dataloader))
+    img_grid = vutils.make_grid(images[:16], normalize=True)
+    writer.add_image("Original Images", img_grid)
 
-        # 残差层
-        self.layer1 = self.make_layer(32, 32, 2, stride=1)
-        self.layer2 = self.make_layer(32, 64, 2, stride=2)
-        self.layer3 = self.make_layer(64, 128, 2, stride=2)
+    # 获取特征图
+    images = images[:16].to(device)
+    features = model.get_features(images)
 
-        # 全局平均池化和全连接层
-        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
-        self.fc = nn.Linear(128, num_classes)
+    # 可视化每个卷积层的特征图
+    for layer_idx, feature_maps in enumerate(features):
+        # 选择第一张图片的所有特征图
+        feature_maps = feature_maps[0].detach().cpu()
+        feature_grid = vutils.make_grid(
+            feature_maps.unsqueeze(1), normalize=True, nrow=8
+        )
+        writer.add_image(f"Feature Maps/Layer_{layer_idx+1}", feature_grid)
 
-    def make_layer(self, in_channels, out_channels, num_blocks, stride):
-        layers = []
-        layers.append(BasicBlock(in_channels, out_channels, stride))
-        for _ in range(1, num_blocks):
-            layers.append(BasicBlock(out_channels, out_channels))
-        return nn.Sequential(*layers)
 
-    def forward(self, x):
-        # 初始层
-        out = F.relu(self.bn1(self.conv1(x)))  # 28x28
+def visualize_kernels(model, writer):
+    # 可视化第一个卷积层的卷积核
+    kernels = model.conv1.weight.detach().cpu()
+    # 确保kernels的形状正确 [out_channels, in_channels, height, width]
+    kernel_grid = vutils.make_grid(kernels, normalize=True, nrow=8, padding=1)
+    writer.add_image("Kernels/Conv1", kernel_grid)
 
-        # 残差层
-        out = self.layer1(out)  # 28x28
-        out = self.layer2(out)  # 14x14
-        out = self.layer3(out)  # 7x7
-
-        # 分类层
-        out = self.avgpool(out)
-        out = out.view(out.size(0), -1)
-        out = self.fc(out)
-        return out
+    # 可视化第二个卷积层的卷积核
+    kernels = model.conv2.weight.detach().cpu()
+    # 重新排列kernels以便可视化
+    kernels = kernels.view(-1, 1, kernels.shape[2], kernels.shape[3])
+    kernel_grid = vutils.make_grid(kernels, normalize=True, nrow=8, padding=1)
+    writer.add_image("Kernels/Conv2", kernel_grid)
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -112,21 +96,16 @@ testset = torchvision.datasets.FashionMNIST(
 )
 testloader = torch.utils.data.DataLoader(testset, batch_size=1024)
 
-model = SmallResNet().to(device)
+model = LeNet().to(device)
 criterion = nn.CrossEntropyLoss()
-optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-4)
-scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-    optimizer, mode="max", factor=0.1, patience=5, verbose=True
-)
+optimizer = optim.Adam(model.parameters(), lr=0.001)
 
 if os.path.exists(log_dir):
     shutil.rmtree(log_dir)
 os.makedirs(log_dir)
 writer = SummaryWriter(log_dir)
 
-seed_everything(42)  # 固定随机种子
-
-epochs = 50
+epochs = 30
 for epoch in range(epochs):
     train_loss = 0.0
     train_correct = 0
@@ -167,5 +146,8 @@ for epoch in range(epochs):
         {"train": train_correct / train_total, "test": test_correct / test_total},
         epoch,
     )
+
+visualize_features(model, testloader, device, writer)
+visualize_kernels(model, writer)
 
 writer.close()
