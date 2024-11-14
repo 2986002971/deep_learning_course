@@ -1,6 +1,8 @@
 import os
+import random
 import shutil
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -12,24 +14,89 @@ from torch.utils.tensorboard import SummaryWriter
 log_dir = "runs/fashion_mnist"
 
 
-class LeNet(nn.Module):
-    def __init__(self):
-        super(LeNet, self).__init__()
-        self.conv1 = nn.Conv2d(1, 6, 5)
-        self.pool = nn.AvgPool2d(2, 2)
-        self.conv2 = nn.Conv2d(6, 16, 5)
-        self.fc1 = nn.Linear(16 * 4 * 4, 120)
-        self.fc2 = nn.Linear(120, 84)
-        self.fc3 = nn.Linear(84, 10)
+def seed_everything(seed=42):
+    random.seed(seed)  # Python的随机种子
+    np.random.seed(seed)  # numpy的随机种子
+    torch.manual_seed(seed)  # PyTorch CPU的随机种子
+    torch.cuda.manual_seed(seed)  # PyTorch GPU的随机种子
+    torch.backends.cudnn.deterministic = True  # 确保每次返回的卷积算法是确定的
+    torch.backends.cudnn.benchmark = False  # 禁用cudnn的随机性
+
+
+class BasicBlock(nn.Module):
+    expansion = 1
+
+    def __init__(self, in_channels, out_channels, stride=1):
+        super(BasicBlock, self).__init__()
+        self.conv1 = nn.Conv2d(
+            in_channels,
+            out_channels,
+            kernel_size=3,
+            stride=stride,
+            padding=1,
+            bias=False,
+        )
+        self.bn1 = nn.BatchNorm2d(out_channels)
+        self.conv2 = nn.Conv2d(
+            out_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=False
+        )
+        self.bn2 = nn.BatchNorm2d(out_channels)
+
+        # shortcut连接
+        self.shortcut = nn.Sequential()
+        if stride != 1 or in_channels != out_channels:
+            self.shortcut = nn.Sequential(
+                nn.Conv2d(
+                    in_channels, out_channels, kernel_size=1, stride=stride, bias=False
+                ),
+                nn.BatchNorm2d(out_channels),
+            )
 
     def forward(self, x):
-        x = self.pool(F.sigmoid(self.conv1(x)))
-        x = self.pool(F.sigmoid(self.conv2(x)))
-        x = x.view(-1, 16 * 4 * 4)
-        x = F.sigmoid(self.fc1(x))
-        x = F.sigmoid(self.fc2(x))
-        x = self.fc3(x)
-        return x
+        out = F.relu(self.bn1(self.conv1(x)))
+        out = self.bn2(self.conv2(out))
+        out += self.shortcut(x)
+        out = F.relu(out)
+        return out
+
+
+class SmallResNet(nn.Module):
+    def __init__(self, num_classes=10):
+        super(SmallResNet, self).__init__()
+        # 初始卷积层
+        self.conv1 = nn.Conv2d(1, 32, kernel_size=3, stride=1, padding=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(32)
+
+        # 残差层
+        self.layer1 = self.make_layer(32, 32, 2, stride=1)
+        self.layer2 = self.make_layer(32, 64, 2, stride=2)
+        self.layer3 = self.make_layer(64, 128, 2, stride=2)
+
+        # 全局平均池化和全连接层
+        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
+        self.fc = nn.Linear(128, num_classes)
+
+    def make_layer(self, in_channels, out_channels, num_blocks, stride):
+        layers = []
+        layers.append(BasicBlock(in_channels, out_channels, stride))
+        for _ in range(1, num_blocks):
+            layers.append(BasicBlock(out_channels, out_channels))
+        return nn.Sequential(*layers)
+
+    def forward(self, x):
+        # 初始层
+        out = F.relu(self.bn1(self.conv1(x)))  # 28x28
+
+        # 残差层
+        out = self.layer1(out)  # 28x28
+        out = self.layer2(out)  # 14x14
+        out = self.layer3(out)  # 7x7
+
+        # 分类层
+        out = self.avgpool(out)
+        out = out.view(out.size(0), -1)
+        out = self.fc(out)
+        return out
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -45,16 +112,21 @@ testset = torchvision.datasets.FashionMNIST(
 )
 testloader = torch.utils.data.DataLoader(testset, batch_size=1024)
 
-model = LeNet().to(device)
+model = SmallResNet().to(device)
 criterion = nn.CrossEntropyLoss()
-optimizer = optim.Adam(model.parameters(), lr=0.001)
+optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-4)
+scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+    optimizer, mode="max", factor=0.1, patience=5, verbose=True
+)
 
 if os.path.exists(log_dir):
     shutil.rmtree(log_dir)
 os.makedirs(log_dir)
 writer = SummaryWriter(log_dir)
 
-epochs = 100
+seed_everything(42)  # 固定随机种子
+
+epochs = 50
 for epoch in range(epochs):
     train_loss = 0.0
     train_correct = 0
