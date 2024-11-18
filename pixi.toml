@@ -1,6 +1,6 @@
 [project]
 authors = ["Horned_Axe <horned_axe@proton.me>"]
-channels = ["nvidia", "conda-forge", "pytorch"]
+channels = ["nvidia/label/cuda-12.4.0","nvidia", "conda-forge", "pytorch"]
 description = "Add a short description here"
 name = "deep_learning"
 platforms = ["linux-64", "win-64"]
@@ -10,10 +10,10 @@ version = "0.1.0"
 
 [dependencies]
 python = "3.12"
-cuda = { version = "*", channel = "nvidia" }
+cuda = { version = "*", channel = "nvidia/label/cuda-12.4.0" }
 pytorch = { version = "*", channel = "pytorch" }
 torchvision = { version = "*", channel = "pytorch" }
-pytorch-cuda = { version = "*", channel = "pytorch" }
+pytorch-cuda = { version = "12.4", channel = "pytorch" }
 tensorboard = ">=2.18.0,<3"
 tqdm = "*"
 
