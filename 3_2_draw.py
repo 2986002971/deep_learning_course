@@ -91,6 +91,7 @@ if __name__ == "__main__":
     for epoch in tqdm(range(epochs)):
         # 训练阶段
         train_losses = {name: 0 for name in batch_sizes.keys()}
+        train_steps = {name: 0 for name in batch_sizes.keys()}
         train_correct = {name: 0 for name in batch_sizes.keys()}
         train_total = {name: 0 for name in batch_sizes.keys()}
 
@@ -106,9 +107,15 @@ if __name__ == "__main__":
                 optimizers[name].step()
 
                 train_losses[name] += loss.item()
+                train_steps[name] += 1
                 _, predicted = torch.max(output, 1)
                 train_total[name] += target.size(0)
                 train_correct[name] += (predicted == target).sum().item()
+
+        # 对loss进行平均，由于criterion的reduction为mean，所以不需要除以batch_size，而是除以steps，越是小batch size，steps越多
+        train_losses = {
+            name: train_losses[name] / train_steps[name] for name in batch_sizes.keys()
+        }
 
         writer.add_scalars(
             "Training Loss",
@@ -118,6 +125,7 @@ if __name__ == "__main__":
 
         # 测试阶段
         test_losses = {name: 0 for name in batch_sizes.keys()}
+        test_steps = {name: 0 for name in batch_sizes.keys()}
         test_correct = {name: 0 for name in batch_sizes.keys()}
         test_total = {name: 0 for name in batch_sizes.keys()}
 
@@ -129,9 +137,15 @@ if __name__ == "__main__":
                     output = models[name](data)
                     loss = criterion(output, target)
                     test_losses[name] += loss.item()
+                    test_steps[name] += 1
                     _, predicted = torch.max(output, 1)
                     test_total[name] += target.size(0)
                     test_correct[name] += (predicted == target).sum().item()
+
+        # 对loss进行平均，由于criterion的reduction为mean，所以不需要除以batch_size，而是除以steps，越是小batch size，steps越多
+        test_losses = {
+            name: test_losses[name] / test_steps[name] for name in batch_sizes.keys()
+        }
 
         writer.add_scalars(
             "Test Loss",
