@@ -73,10 +73,8 @@ def test_batch(data, target, model, criterion, device):
 
 
 if __name__ == "__main__":
-    # 设置随机种子
     seed_everything()
 
-    # 加载数据
     training_data = datasets.MNIST(
         root="data", train=True, download=True, transform=ToTensor()
     )
@@ -88,7 +86,6 @@ if __name__ == "__main__":
     )
     test_loader = DataLoader(test_data, batch_size=256, shuffle=True, num_workers=24)
 
-    # 设置设备和模型
     assert (
         torch.cuda.is_available()
     ), "CUDA is not available. This script requires a GPU."
@@ -97,7 +94,6 @@ if __name__ == "__main__":
     optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
     criterion = nn.CrossEntropyLoss()
 
-    # 创建目录
     log_dir = "./runs/profiler"
     if os.path.exists(log_dir):
         shutil.rmtree(log_dir)
@@ -112,7 +108,6 @@ if __name__ == "__main__":
         profile_memory=True,
         with_modules=True,
     ) as prof:
-        # 运行几个批次的训练
         for data, target in train_loader:
             prof.step()
             loss, output = train_batch(
