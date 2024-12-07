@@ -1,4 +1,3 @@
-import math
 import os
 import shutil
 
@@ -40,7 +39,7 @@ def seed_everything(seed=42):
 if __name__ == "__main__":
     seed_everything()
 
-    log_dir = "runs/mnist_lr_schedulers"
+    log_dir = "runs/mnist_weight_decay"
     if os.path.exists(log_dir):
         shutil.rmtree(log_dir)
     os.makedirs(log_dir)
@@ -60,90 +59,53 @@ if __name__ == "__main__":
         transform=ToTensor(),
     )
 
-    # 创建数据加载器
-    batch_size = 128
+    # 定义不同的权重衰减率
+    weight_decays = {
+        "wd_0": 0.0,  # 无权重衰减
+        "wd_0.0001": 0.0001,  # 较小的权重衰减
+        "wd_0.001": 0.001,  # 中等权重衰减
+        "wd_0.01": 0.01,  # 较大的权重衰减
+        "wd_0.1": 0.1,  # 很大的权重衰减
+    }
+
+    # 创建数据加载器(使用固定的batch size)
+    batch_size = 64
     train_loader = DataLoader(
-        training_data, batch_size=batch_size, shuffle=True, num_workers=24
+        training_data, batch_size=batch_size, shuffle=True, num_workers=16
     )
     test_loader = DataLoader(
-        test_data, batch_size=batch_size, shuffle=True, num_workers=24
+        test_data, batch_size=batch_size, shuffle=True, num_workers=16
     )
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    # 定义不同的学习率配置
-    lr_configs = {
-        "fixed": {"base_lr": 0.1},
-        "exp": {"base_lr": 0.1, "gamma": 0.95},
-        "step": {"base_lr": 0.1, "milestones": [20, 35], "gamma": 0.1},
-        "poly": {"base_lr": 0.1, "power": 0.9},
-        "linear": {"base_lr": 0.1},
-        "cosine": {"base_lr": 0.1},
-        "warmup": {"base_lr": 0.1, "warmup_epochs": 5},
-    }
-
-    # 为每种学习率策略创建独立的模型和优化器
-    models = {name: MLP().to(device) for name in lr_configs.keys()}
+    # 为每个权重衰减率创建独立的模型和优化器
+    models = {name: MLP().to(device) for name in weight_decays.keys()}
     optimizers = {
-        name: torch.optim.SGD(models[name].parameters(), lr=lr_configs[name]["base_lr"])
-        for name in lr_configs.keys()
+        name: torch.optim.SGD(
+            model.parameters(),
+            lr=0.01,
+            momentum=0.9,  # 添加动量
+            weight_decay=wd,  # 设置不同的权重衰减率
+        )
+        for name, (model, wd) in zip(
+            models.keys(), zip(models.values(), weight_decays.values())
+        )
     }
-
-    # 创建学习率调度器
-    schedulers = {}
-    epochs = 50
-    for name, config in lr_configs.items():
-        if name == "fixed":
-            schedulers[name] = torch.optim.lr_scheduler.LambdaLR(
-                optimizers[name], lambda epoch: 1
-            )
-        elif name == "exp":
-            schedulers[name] = torch.optim.lr_scheduler.ExponentialLR(
-                optimizers[name], gamma=config["gamma"]
-            )
-        elif name == "step":
-            schedulers[name] = torch.optim.lr_scheduler.MultiStepLR(
-                optimizers[name], milestones=config["milestones"], gamma=config["gamma"]
-            )
-        elif name == "poly":
-            power = config["power"]
-            schedulers[name] = torch.optim.lr_scheduler.LambdaLR(
-                optimizers[name], lambda epoch, p=power: (1 - epoch / epochs) ** p
-            )
-        elif name == "linear":
-            schedulers[name] = torch.optim.lr_scheduler.LambdaLR(
-                optimizers[name], lambda epoch: 1 - epoch / epochs
-            )
-        elif name == "cosine":
-            schedulers[name] = torch.optim.lr_scheduler.CosineAnnealingLR(
-                optimizers[name], T_max=epochs
-            )
-        elif name == "warmup":
-            warmup_epochs = config["warmup_epochs"]
-
-            def warmup_lr(epoch, w_epochs=warmup_epochs):
-                if epoch < w_epochs:
-                    return epoch / w_epochs
-                return 0.5 * (
-                    1 + math.cos(math.pi * (epoch - w_epochs) / (epochs - w_epochs))
-                )
-
-            schedulers[name] = torch.optim.lr_scheduler.LambdaLR(
-                optimizers[name], warmup_lr
-            )
-
     criterion = nn.CrossEntropyLoss()
 
+    # 训练循环
+    epochs = 50
     for epoch in tqdm(range(epochs)):
         # 训练阶段
-        train_losses = {name: 0 for name in lr_configs.keys()}
-        train_steps = {name: 0 for name in lr_configs.keys()}
-        train_correct = {name: 0 for name in lr_configs.keys()}
-        train_total = {name: 0 for name in lr_configs.keys()}
+        train_losses = {name: 0 for name in weight_decays.keys()}
+        train_steps = {name: 0 for name in weight_decays.keys()}
+        train_correct = {name: 0 for name in weight_decays.keys()}
+        train_total = {name: 0 for name in weight_decays.keys()}
 
-        for name in lr_configs.keys():
+        for name in weight_decays.keys():
             models[name].train()
-            for data, target in train_loader:
+            for data, target in train_loader:  # 使用相同的数据加载器
                 data, target = data.to(device), target.to(device)
 
                 optimizers[name].zero_grad()
@@ -158,17 +120,10 @@ if __name__ == "__main__":
                 train_total[name] += target.size(0)
                 train_correct[name] += (predicted == target).sum().item()
 
-            # 更新学习率
-            schedulers[name].step()
-
-            # 记录当前学习率
-            writer.add_scalar(
-                f"Learning Rate/{name}", schedulers[name].get_last_lr()[0], epoch
-            )
-
         # 对loss进行平均，由于criterion的reduction为mean，所以不需要除以batch_size，而是除以steps，越是小batch size，steps越多
         train_losses = {
-            name: train_losses[name] / train_steps[name] for name in lr_configs.keys()
+            name: train_losses[name] / train_steps[name]
+            for name in weight_decays.keys()
         }
 
         writer.add_scalars(
@@ -178,12 +133,12 @@ if __name__ == "__main__":
         )
 
         # 测试阶段
-        test_losses = {name: 0 for name in lr_configs.keys()}
-        test_steps = {name: 0 for name in lr_configs.keys()}
-        test_correct = {name: 0 for name in lr_configs.keys()}
-        test_total = {name: 0 for name in lr_configs.keys()}
+        test_losses = {name: 0 for name in weight_decays.keys()}
+        test_steps = {name: 0 for name in weight_decays.keys()}
+        test_correct = {name: 0 for name in weight_decays.keys()}
+        test_total = {name: 0 for name in weight_decays.keys()}
 
-        for name in lr_configs.keys():
+        for name in weight_decays.keys():
             models[name].eval()
             with torch.no_grad():
                 for data, target in test_loader:
@@ -198,7 +153,7 @@ if __name__ == "__main__":
 
         # 对loss进行平均，由于criterion的reduction为mean，所以不需要除以batch_size，而是除以steps，越是小batch size，steps越多
         test_losses = {
-            name: test_losses[name] / test_steps[name] for name in lr_configs.keys()
+            name: test_losses[name] / test_steps[name] for name in weight_decays.keys()
         }
 
         writer.add_scalars(
@@ -211,14 +166,14 @@ if __name__ == "__main__":
         accuracy_dict = {
             f"train_{name}": correct / total
             for name, correct, total in zip(
-                lr_configs.keys(), train_correct.values(), train_total.values()
+                weight_decays.keys(), train_correct.values(), train_total.values()
             )
         }
         accuracy_dict.update(
             {
                 f"test_{name}": correct / total
                 for name, correct, total in zip(
-                    lr_configs.keys(), test_correct.values(), test_total.values()
+                    weight_decays.keys(), test_correct.values(), test_total.values()
                 )
             }
         )
