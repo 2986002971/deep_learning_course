@@ -206,6 +206,10 @@ if __name__ == "__main__":
                     )
                     total_loss = 0
 
+        # 保存模型
+        torch.save(model.state_dict(), "lstm_model.pth")
+        print("模型已保存到 'lstm_model.pth'")
+
         # 生成文本
         model.eval()
         seed_text = "The time machine"

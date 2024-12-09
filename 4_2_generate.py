@@ -114,7 +114,7 @@ if __name__ == "__main__":
     print("\n开始生成文本...\n")
     for i, prompt in enumerate(prompts, 1):
         print(f"\n=== 提示词 {i}: '{prompt}' ===")
-        # 使用不同的temperature值生成两��版本
+        # 使用不同的temperature值生成两个版本
         for temp in [0.7, 1.0]:
             generated = generate_text(
                 model,
