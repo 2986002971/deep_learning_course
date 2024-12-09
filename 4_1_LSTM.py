@@ -42,7 +42,7 @@ def get_time_machine_text():
 
 def tokenize_text(text):
     """
-    使用BERT tokenizer对文本进行分词
+    使用BERT tokenizer对文本进行分词，按句子处理
 
     Args:
         text (str): 输入文本
@@ -53,19 +53,31 @@ def tokenize_text(text):
     # 使用BERT tokenizer
     tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")
 
-    # 将文本分成行
-    text_lines = [line.strip() for line in text.split("\n") if line.strip()]
+    # 简单的句子分割（可以根据需要改进）
+    sentences = []
+    for line in text.split("\n"):
+        line = line.strip()
+        if not line:  # 跳过空行
+            continue
+
+        # 分割成句子（根据句号、问号和感叹号）
+        parts = line.replace("!", ".").replace("?", ".").split(".")
+        for part in parts:
+            part = part.strip()
+            if part:
+                sentences.append(part + ".")
 
     # 对文本进行编码
     encoded_text = []
-    for line in text_lines:
-        # 添加特殊标记并编码
-        encoded = tokenizer.encode(
-            line,
-            add_special_tokens=True,  # 添加[CLS]和[SEP]标记
-            return_tensors="pt",  # 返回PyTorch张量
-        )
-        encoded_text.append(encoded.squeeze(0))  # 移除batch维度
+    for sentence in sentences:
+        if len(sentence.split()) > 3:  # 跳过过短的句子
+            # 添加特殊标记并编码
+            encoded = tokenizer.encode(
+                sentence,
+                add_special_tokens=True,  # 添加[CLS]和[SEP]标记
+                return_tensors="pt",  # 返回PyTorch张量
+            )
+            encoded_text.append(encoded.squeeze(0))  # 移除batch维度
 
     return tokenizer, encoded_text
 

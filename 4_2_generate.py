@@ -42,6 +42,11 @@ def generate_text(
 ):
     """生成文本"""
     model.eval()
+
+    # 确保种子文本以句号结束
+    if not seed_text.endswith("."):
+        seed_text = seed_text + "."
+
     tokens = tokenizer.encode(seed_text, return_tensors="pt").to(device)
 
     with torch.no_grad():
@@ -52,12 +57,26 @@ def generate_text(
             next_token_logits = output[0, -1, :] / temperature
             probs = torch.softmax(next_token_logits, dim=-1)
             next_token = torch.multinomial(probs, num_samples=1)
+
+            # 将新token添加到序列中
             tokens = torch.cat([tokens, next_token.unsqueeze(0)], dim=1)
 
-            if next_token.item() == tokenizer.sep_token_id:  # 改为BERT的sep_token_id
+            # 检查是否生成了完整的句子
+            generated_text = tokenizer.decode(tokens[0], skip_special_tokens=True)
+            if (
+                generated_text.endswith(".")
+                or generated_text.endswith("!")
+                or generated_text.endswith("?")
+            ):
+                if len(generated_text.split()) > 5:  # 确保句子足够长
+                    break
+
+            # 如果达到最大长度，强制在合适的位置结束
+            if len(tokens[0]) >= max_length:
+                generated_text = generated_text.rstrip() + "."
                 break
 
-    return tokenizer.decode(tokens[0], skip_special_tokens=True)
+    return generated_text
 
 
 if __name__ == "__main__":
@@ -95,7 +114,7 @@ if __name__ == "__main__":
     print("\n开始生成文本...\n")
     for i, prompt in enumerate(prompts, 1):
         print(f"\n=== 提示词 {i}: '{prompt}' ===")
-        # 使用不同的temperature值生成两个版本
+        # 使用不同的temperature值生成两��版本
         for temp in [0.7, 1.0]:
             generated = generate_text(
                 model,
